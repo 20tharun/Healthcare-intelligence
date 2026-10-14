@@ -16,11 +16,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
-NOMINATIM = "https://nominatim.openstreetmap.org/search"
 
 class SearchRequest(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
