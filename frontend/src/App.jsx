@@ -2,7 +2,8 @@ import {useState} from 'react';
 import {HeartPulse,MapPin,LocateFixed,Search,ShieldAlert,Phone,Navigation,Building2,Activity} from 'lucide-react';
 const cities=['Coimbatore, Tamil Nadu','Chennai, Tamil Nadu','Madurai, Tamil Nadu','Salem, Tamil Nadu','Tiruchirappalli, Tamil Nadu','Erode, Tamil Nadu','Tiruppur, Tamil Nadu','Bengaluru, Karnataka','Other / enter city'];
 const services=['Emergency department','ICU beds','Oxygen support','Ventilator support','Cardiologist','Neurologist','Orthopedic specialist','Blood bank','CT scan / MRI','Emergency surgery','NICU','Dialysis'];
-const API='http://127.0.0.1:8000';
+const API = (import.meta.env.VITE_API_URL || 'https://healthcare-intelligence-uvrm.onrender.com').replace(/\/$/, '');
+
 export default function App(){
  const [city,setCity]=useState(cities[0]),[customCity,setCustomCity]=useState(''),[lat,setLat]=useState('11.0168'),[lon,setLon]=useState('76.9558'),[useCoords,setUseCoords]=useState(false),[radius,setRadius]=useState('15'),[servicesChosen,setServicesChosen]=useState(['Emergency department']),[hospitals,setHospitals]=useState([]),[loading,setLoading]=useState(false),[searched,setSearched]=useState(false),[notice,setNotice]=useState(''),[dataNotice,setDataNotice]=useState('');
  const toggle=s=>setServicesChosen(old=>old.includes(s)?old.filter(x=>x!==s):[...old,s]);
