@@ -74,7 +74,7 @@ async def search(req: SearchRequest):
            f'nwr["healthcare"="hospital"](around:{radius},{lat},{lon});'
            f'nwr["healthcare"="clinic"](around:{radius},{lat},{lon}););out center tags;')
     payload=None; last_error=None
-    async with httpx.AsyncClient(timeout=42, headers={"User-Agent":"HealthcareIntelligenceStudentPrototype/0.2"}) as client:
+    async with httpx.AsyncClient(timeout=20, headers={"User-Agent":"HealthcareIntelligenceStudentPrototype/0.2"}) as client:
         for endpoint in OVERPASS_ENDPOINTS:
             try:
                 resp=await client.post(endpoint, data={"data":query})
