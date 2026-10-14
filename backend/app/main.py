@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -5,8 +6,15 @@ import httpx, math
 
 app = FastAPI(title="Healthcare Intelligence API", version="0.2.0",
  description="Hospital discovery prototype. Public map data is not live clinical capacity data.")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
- allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://healthcare-intelligence-eight.vercel.app"
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
