@@ -1,21 +1,16 @@
-from fastapi.middleware.cors import CORSMiddleware
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-import httpx, math
+import httpx
+import math
 
-app = FastAPI(title="Healthcare Intelligence API", version="0.2.0",
- description="Hospital discovery prototype. Public map data is not live clinical capacity data.")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://healthcare-intelligence-eight.vercel.app"
-    ],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
+
+NOMINATIM = "https://nominatim.openstreetmap.org/search"
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -23,93 +18,364 @@ OVERPASS_ENDPOINTS = [
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
 
+app = FastAPI(
+    title="Healthcare Intelligence API",
+    version="0.2.1",
+    description=(
+        "Hospital discovery prototype. Public map data does not "
+        "provide verified live clinical capacity."
+    ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://healthcare-intelligence-eight.vercel.app",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --------------------------------------------------
+# Request model
+# --------------------------------------------------
+
 class SearchRequest(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     city: str | None = None
     radius_km: float = Field(default=15, ge=1, le=100)
     emergency_type: str = "General emergency"
-    required_services: list[str] = []
+    required_services: list[str] = Field(default_factory=list)
 
-def distance_km(a,b,c,d):
-    r=6371
-    p1,p2=math.radians(a),math.radians(c)
-    dp=math.radians(c-a); dl=math.radians(d-b)
-    x=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
-    return 2*r*math.asin(math.sqrt(x))
+
+# --------------------------------------------------
+# Distance calculation
+# --------------------------------------------------
+
+def distance_km(lat1, lon1, lat2, lon2):
+    earth_radius = 6371.0
+
+    lat1 = math.radians(lat1)
+    lat2 = math.radians(lat2)
+    delta_lat = lat2 - lat1
+    delta_lon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1)
+        * math.cos(lat2)
+        * math.sin(delta_lon / 2) ** 2
+    )
+
+    # Protect against small floating-point rounding errors.
+    a = max(0.0, min(1.0, a))
+
+    return 2 * earth_radius * math.asin(math.sqrt(a))
+
+
+# --------------------------------------------------
+# Basic endpoints
+# --------------------------------------------------
 
 @app.get("/")
 def root():
-    return {"name":"Healthcare Intelligence API","status":"running","docs":"/docs",
-            "notice":"Live clinical availability is unknown without a verified integration."}
+    return {
+        "name": "Healthcare Intelligence API",
+        "status": "running",
+        "docs": "/docs",
+        "notice": (
+            "Live clinical availability is unknown unless "
+            "confirmed through a verified hospital integration."
+        ),
+    }
+
 
 @app.get("/api/health")
-def health(): return {"status":"ok"}
+def health():
+    return {"status": "ok"}
 
-async def geocode_city(client, city):
+
+# --------------------------------------------------
+# Convert a city name into coordinates
+# --------------------------------------------------
+
+async def geocode_city(client: httpx.AsyncClient, city: str):
     try:
-        r=await client.get(NOMINATIM, params={"q":city,"format":"jsonv2","limit":1,"countrycodes":"in"},
-                           headers={"User-Agent":"HealthcareIntelligenceStudentPrototype/0.2 (educational project)"})
-        r.raise_for_status(); data=r.json()
-        if data: return float(data[0]["lat"]), float(data[0]["lon"]), data[0].get("display_name", city)
-    except (httpx.HTTPError, ValueError, KeyError, IndexError): pass
-    return None
+        response = await client.get(
+            NOMINATIM,
+            params={
+                "q": city,
+                "format": "jsonv2",
+                "limit": 1,
+                "countrycodes": "in",
+            },
+            headers={
+                "User-Agent": (
+                    "HealthcareIntelligenceStudentPrototype/0.2.1 "
+                    "(educational project)"
+                )
+            },
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            return None
+
+        latitude = float(data[0]["lat"])
+        longitude = float(data[0]["lon"])
+        display_name = data[0].get("display_name", city)
+
+        return latitude, longitude, display_name
+
+    except (
+        httpx.HTTPError,
+        ValueError,
+        KeyError,
+        IndexError,
+        TypeError,
+    ):
+        return None
+
+
+# --------------------------------------------------
+# Search public map data for hospitals and clinics
+# --------------------------------------------------
 
 @app.post("/api/hospitals/search")
 async def search(req: SearchRequest):
+
+    # Step 1: Resolve the search location.
     if req.city and req.city.strip():
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                geo=await geocode_city(client, req.city.strip())
-        except httpx.HTTPError: geo=None
-        if not geo:
-            raise HTTPException(404, f"Could not find the location '{req.city}'. Try a city name such as Coimbatore or Chennai, or enter coordinates.")
-        lat, lon, resolved_city=geo
-    elif req.latitude is not None and req.longitude is not None:
-        lat, lon, resolved_city=req.latitude, req.longitude, "Entered coordinates"
-    else:
-        raise HTTPException(422, "Enter a city name or provide both latitude and longitude.")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                geo = await geocode_city(client, req.city.strip())
+        except httpx.HTTPError:
+            geo = None
 
-    radius=int(req.radius_km*1000)
-    query=(f'[out:json][timeout:35];(nwr["amenity"="hospital"](around:{radius},{lat},{lon});'
-           f'nwr["healthcare"="hospital"](around:{radius},{lat},{lon});'
-           f'nwr["healthcare"="clinic"](around:{radius},{lat},{lon}););out center tags;')
-    payload=None; last_error=None
+        if not geo:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Could not resolve '{req.city}' using the public "
+                    "geocoding service. Try again or enter coordinates."
+                ),
+            )
+
+        lat, lon, resolved_city = geo
+
+    elif req.latitude is not None and req.longitude is not None:
+        lat = req.latitude
+        lon = req.longitude
+        resolved_city = "Entered coordinates"
+
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Enter a city name or provide both latitude "
+                "and longitude."
+            ),
+        )
+
+    # Step 2: Build the OpenStreetMap Overpass query.
+    radius_meters = int(req.radius_km * 1000)
+
+    query = (
+        f"[out:json][timeout:35];("
+        f'nwr["amenity"="hospital"]'
+        f"(around:{radius_meters},{lat},{lon});'
+        f'nwr["healthcare"="hospital"]'
+        f"(around:{radius_meters},{lat},{lon});'
+        f'nwr["healthcare"="clinic"]'
+        f"(around:{radius_meters},{lat},{lon});'
+        f");out center tags;"
+    )
+
+    payload = None
+    last_error = None
+
+    # Step 3: Try the available public map endpoints.
     async with httpx.AsyncClient(
-    timeout=20,
-    headers={"User-Agent": "HealthcareIntelligenceStudentPrototype/0.2"}
-) as client:
+        timeout=45.0,
+        headers={
+            "User-Agent": "HealthcareIntelligenceStudentPrototype/0.2.1"
+        },
+    ) as client:
+
         for endpoint in OVERPASS_ENDPOINTS:
             try:
-                resp=await client.post(endpoint, data={"data":query})
-                resp.raise_for_status(); payload=resp.json(); break
-            except (httpx.HTTPError, ValueError) as exc: last_error=exc
-    if payload is None:
-        raise HTTPException(502, "Public hospital map service is temporarily unavailable. Please retry in a minute; this does not mean there are no hospitals.") from last_error
+                response = await client.post(
+                    endpoint,
+                    data={"data": query},
+                )
+                response.raise_for_status()
 
-    results=[]; seen=set()
-    for el in payload.get("elements",[]):
-        tags=el.get("tags",{}); name=tags.get("name") or tags.get("name:en")
-        center=el.get("center",{}); hlat=el.get("lat",center.get("lat")); hlon=el.get("lon",center.get("lon"))
-        if not name or hlat is None or hlon is None: continue
-        key=name.strip().lower()
-        if key in seen: continue
-        seen.add(key)
-        hlat,hlon=float(hlat),float(hlon); dist=distance_km(lat,lon,hlat,hlon)
-        if dist > req.radius_km: continue
-        addr=", ".join(v for v in [tags.get("addr:street"),tags.get("addr:suburb"),tags.get("addr:city"),tags.get("addr:postcode")] if v) or "Address not listed"
-        mapped=[]
-        if tags.get("emergency")=="yes": mapped.append("Emergency service tag listed (not live-verified)")
-        spec=tags.get("healthcare:speciality") or tags.get("healthcare:specialty")
-        if spec: mapped.append("Mapped specialty: "+str(spec))
-        score=round(max(0,100-min(dist*2,80)),1)
-        explanations=[f"Distance-based baseline: {dist:.2f} km straight-line distance.","Public map tags do not verify real-time capacity or patient acceptance."]
-        results.append({"id":f'{el.get("type")}/{el.get("id")}',"name":name,"latitude":hlat,"longitude":hlon,
-          "address":addr,"phone":tags.get("phone") or tags.get("contact:phone"),
-          "osm_url":f'https://www.openstreetmap.org/{el.get("type")}/{el.get("id")}',
-          "mapped_services":mapped,"distance_km":round(dist,2),"score":score,"score_explanation":explanations,
-          "availability_status":"Unknown — not verified","live_capacity_status":"No live hospital capacity integration"})
-    results.sort(key=lambda h:(h["distance_km"],-h["score"],h["name"].lower()))
-    return {"count":len(results),"resolved_location":resolved_city,"center":{"latitude":lat,"longitude":lon},
-      "source":"OpenStreetMap / Overpass API","data_notice":"Community map data may be incomplete. Live beds, oxygen, ventilators, specialist availability and hospital acceptance are unknown.",
-      "recommendation_method":"Distance-based prototype ranking; not a trained or clinically validated model.","hospitals":results}
+                data = response.json()
+
+                if not isinstance(data, dict):
+                    raise ValueError("Unexpected map service response")
+
+                payload = data
+                break
+
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+
+    if payload is None:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Public hospital map services are temporarily "
+                "unavailable. Please retry later. This does not mean "
+                "that there are no hospitals in the area."
+            ),
+        ) from last_error
+
+    # Step 4: Process hospital and clinic records.
+    results = []
+    seen = set()
+
+    for element in payload.get("elements", []):
+        tags = element.get("tags", {})
+
+        name = tags.get("name") or tags.get("name:en")
+        center = element.get("center", {})
+
+        hospital_lat = element.get("lat", center.get("lat"))
+        hospital_lon = element.get("lon", center.get("lon"))
+
+        if not name or hospital_lat is None or hospital_lon is None:
+            continue
+
+        try:
+            hospital_lat = float(hospital_lat)
+            hospital_lon = float(hospital_lon)
+        except (TypeError, ValueError):
+            continue
+
+        distance = distance_km(
+            lat,
+            lon,
+            hospital_lat,
+            hospital_lon,
+        )
+
+        if distance > req.radius_km:
+            continue
+
+        unique_key = (
+            element.get("type"),
+            element.get("id"),
+        )
+
+        if unique_key in seen:
+            continue
+
+        seen.add(unique_key)
+
+        address_parts = [
+            tags.get("addr:street"),
+            tags.get("addr:suburb"),
+            tags.get("addr:city"),
+            tags.get("addr:postcode"),
+        ]
+
+        address = ", ".join(
+            part for part in address_parts if part
+        ) or "Address not listed"
+
+        mapped_services = []
+
+        if tags.get("emergency") == "yes":
+            mapped_services.append(
+                "Emergency service tag listed (not live-verified)"
+            )
+
+        specialty = (
+            tags.get("healthcare:speciality")
+            or tags.get("healthcare:specialty")
+        )
+
+        if specialty:
+            mapped_services.append(
+                "Mapped specialty: " + str(specialty)
+            )
+
+        score = round(
+            max(0, 100 - min(distance * 2, 80)),
+            1,
+        )
+
+        explanations = [
+            (
+                f"Distance-based baseline: {distance:.2f} km "
+                "straight-line distance."
+            ),
+            (
+                "Public map tags do not verify real-time capacity "
+                "or patient acceptance."
+            ),
+        ]
+
+        results.append(
+            {
+                "id": (
+                    f'{element.get("type")}/{element.get("id")}'
+                ),
+                "name": name,
+                "latitude": hospital_lat,
+                "longitude": hospital_lon,
+                "address": address,
+                "phone": (
+                    tags.get("phone")
+                    or tags.get("contact:phone")
+                ),
+                "osm_url": (
+                    f'https://www.openstreetmap.org/'
+                    f'{element.get("type")}/{element.get("id")}'
+                ),
+                "mapped_services": mapped_services,
+                "distance_km": round(distance, 2),
+                "score": score,
+                "score_explanation": explanations,
+                "availability_status": "Unknown — not verified",
+                "live_capacity_status": (
+                    "No live hospital capacity integration"
+                ),
+            }
+        )
+
+    # Step 5: Sort by distance, then score and name.
+    results.sort(
+        key=lambda hospital: (
+            hospital["distance_km"],
+            -hospital["score"],
+            hospital["name"].lower(),
+        )
+    )
+
+    # Keep the response keys expected by the frontend.
+    return {
+        "count": len(results),
+        "resolved_location": resolved_city,
+        "center": {
+            "latitude": lat,
+            "longitude": lon,
+        },
+        "source": "OpenStreetMap / Overpass API",
+        "data_notice": (
+            "Community map data may be incomplete. Live beds, oxygen, "
+            "ventilators, specialist availability and hospital "
+            "acceptance are unknown."
+        ),
+        "recommendation_method": (
+            "Distance-based prototype ranking; not a trained "
+            "or clinically validated model."
+        ),
+        "hospitals": results,
+    }
