@@ -185,19 +185,22 @@ async def search(req: SearchRequest):
     # Step 2: Build the OpenStreetMap Overpass query.
     radius_meters = int(req.radius_km * 1000)
 
+   
+
     query = (
-        f"[out:json][timeout:35];("
+        f'[out:json][timeout:35];('
         f'nwr["amenity"="hospital"]'
-        f"(around:{radius_meters},{lat},{lon});'
+        f'(around:{radius_meters},{lat},{lon});'
         f'nwr["healthcare"="hospital"]'
-        f"(around:{radius_meters},{lat},{lon});'
+        f'(around:{radius_meters},{lat},{lon});'
         f'nwr["healthcare"="clinic"]'
-        f"(around:{radius_meters},{lat},{lon});'
-        f");out center tags;"
+        f'(around:{radius_meters},{lat},{lon});'
+        f');out center tags;'
     )
 
     payload = None
     last_error = None
+
 
     # Step 3: Try the available public map endpoints.
     async with httpx.AsyncClient(
