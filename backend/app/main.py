@@ -10,7 +10,9 @@ import math
 # Configuration
 # --------------------------------------------------
 
+
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
+
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
